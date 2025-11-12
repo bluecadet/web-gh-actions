@@ -2,7 +2,7 @@
 
 This repository contains reusable GitHub Actions for web projects.
 
-## Actions
+## Available Actions
 
 ### [`ensure-composer-package`](actions/ensure-composer-package/action.yml)
 
@@ -13,7 +13,10 @@ Checks if a Composer package is installed at a minimum version, and can require 
 - `min-version` (required): Minimum version required (e.g. `6.1.0`)
 - `dev`: Require as dev dependency (`true`/`false`, default: `false`)
 - `working-directory`: Directory to run composer in (default: `.`)
-- `mode`: `enforce` (require/upgrade if needed), `fail` (fail if not met), or `dry-run` (default: `enforce`)
+- `mode`:
+  - `enforce`: Require/upgrade if needed (default)
+  - `fail`: Fail if not met
+  - `dry-run`: Only check, do not modify
 
 **Example usage:**
 ```yaml
@@ -24,3 +27,32 @@ Checks if a Composer package is installed at a minimum version, and can require 
     dev: false
     mode: enforce
 ```
+
+---
+
+## Usage
+
+To use an action from this repository in your workflow, reference it with a relative path:
+
+```yaml
+jobs:
+  composer-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./actions/ensure-composer-package
+        with:
+          package: symfony/console
+          min-version: 6.1.0
+```
+
+## Contributing
+
+1. Fork the repository and create your branch.
+2. Add or update actions in the `actions/` directory.
+3. Update this README with documentation for new actions.
+4. Open a pull request.
+
+## License
+
+MIT
