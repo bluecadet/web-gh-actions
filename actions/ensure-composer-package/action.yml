@@ -1,0 +1,88 @@
+name: "Ensure Composer Package (min version)"
+description: "Check if a Composer package meets a minimum version; require/upgrade if not."
+inputs:
+  package:
+    description: "e.g. symfony/console"
+    required: true
+  min-version:
+    description: "e.g. 6.1.0"
+    required: true
+  dev:
+    description: "Require as dev dependency (true/false)"
+    default: "false"
+    required: false
+  working-directory:
+    description: "Directory to run composer in"
+    default: "."
+    required: false
+  mode:
+    description: "enforce | fail | dry-run"
+    default: "enforce"
+    required: false
+runs:
+  using: "composite"
+  steps:
+    - name: Ensure Composer package min version
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        PKG: ${{ inputs.package }}
+        MIN_VERSION: ${{ inputs['min-version'] }}
+        REQUIRE_DEV: ${{ inputs.dev }}
+        MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+
+        INSTALLED_VERSION="$(composer show -i --format=json | php -r '
+          $pkg = getenv("PKG");
+          $in = stream_get_contents(STDIN);
+          $data = json_decode($in, true);
+          $ver = "";
+          foreach (($data["installed"] ?? []) as $p) {
+            if (($p["name"] ?? "") === $pkg) { $ver = (string)($p["version"] ?? ""); break; }
+          }
+          echo $ver;
+        ')"
+
+        vc_ge() {
+          php -r '
+            [$a,$b] = [$argv[1], $argv[2]];
+            $a = ltrim((string)$a, "v"); $b = ltrim((string)$b, "v");
+            echo version_compare($a, $b, ">=") ? "1" : "0";
+          ' "$1" "$2"
+        }
+
+        require_pkg() {
+          if [ "$REQUIRE_DEV" = "true" ]; then
+            composer require --no-interaction --no-progress --dev "${PKG}:>=${MIN_VERSION}"
+          else
+            composer require --no-interaction --no-progress "${PKG}:>=${MIN_VERSION}"
+          fi
+        }
+
+        if [ -z "${INSTALLED_VERSION:-}" ]; then
+          echo "::notice::${PKG} not installed."
+          if [ "$MODE" = "enforce" ]; then
+            echo "::notice::Requiring >= ${MIN_VERSION}..."
+            require_pkg
+          elif [ "$MODE" = "fail" ]; then
+            echo "::error::${PKG} is missing (min ${MIN_VERSION})."
+            exit 1
+          else
+            echo "::warning::Dry run: would require ${PKG}:>=${MIN_VERSION}"
+          fi
+          exit 0
+        fi
+
+        echo "::notice::${PKG} installed version: ${INSTALLED_VERSION}"
+        if [ "$(vc_ge "$INSTALLED_VERSION" "$MIN_VERSION")" = "1" ]; then
+          echo "::notice::Satisfies minimum ${MIN_VERSION}."
+          exit 0
+        fi
+
+        echo "::warning::${PKG} ${INSTALLED_VERSION} < ${MIN_VERSION}"
+        case "$MODE" in
+          enforce) echo "::notice::Upgrading..."; require_pkg ;;
+          fail)    echo "::error::Minimum not met (need ${MIN_VERSION})."; exit 1 ;;
+          dry-run) echo "::warning::Dry run: would upgrade to >= ${MIN_VERSION}" ;;
+        esac
