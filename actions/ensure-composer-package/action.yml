@@ -33,7 +33,7 @@ runs:
       run: |
         set -euo pipefail
 
-        INSTALLED_VERSION="$(composer show -i --format=json | php -r '
+        INSTALLED_VERSION="$(composer show --format=json | php -r '
           $pkg = getenv("PKG");
           $in = stream_get_contents(STDIN);
           $data = json_decode($in, true);
