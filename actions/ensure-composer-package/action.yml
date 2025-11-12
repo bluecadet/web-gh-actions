@@ -1,3 +1,4 @@
+# actions/ensure-composer-package/action.yml
 name: "Ensure Composer Package (min version)"
 description: "Check if a Composer package meets a minimum version; require/upgrade if not."
 inputs:
@@ -19,9 +20,41 @@ inputs:
     description: "enforce | fail | dry-run"
     default: "enforce"
     required: false
+  ensure-install:
+    description: "auto | require | skip"
+    default: "auto"
 runs:
   using: "composite"
   steps:
+    - name: Validate project & optionally ensure install
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        ENSURE_INSTALL: ${{ inputs.ensure-install }}
+      run: |
+        set -euo pipefail
+        if [ ! -f composer.json ]; then
+          echo "::error::composer.json not found in $(pwd)"
+          exit 1
+        fi
+
+        # If vendor/composer/installed.php is missing, install hasn’t been run yet.
+        if [ ! -f vendor/composer/installed.php ]; then
+          case "$ENSURE_INSTALL" in
+            auto)
+              echo "::notice::composer install has not been run. Running it now..."
+              composer install --no-interaction --no-progress --prefer-dist
+              ;;
+            require)
+              echo "::error::composer install has not been run (vendor/composer/installed.php missing). Run composer install earlier in the job or set ensure-install=auto."
+              exit 1
+              ;;
+            skip)
+              echo "::warning::composer install appears not to have been run. Continuing, but no packages will be detected."
+              ;;
+          esac
+        fi
+
     - name: Ensure Composer package min version
       shell: bash
       working-directory: ${{ inputs.working-directory }}
@@ -33,6 +66,7 @@ runs:
       run: |
         set -euo pipefail
 
+        # Read installed packages (no deprecated -i)
         INSTALLED_VERSION="$(composer show --format=json | php -r '
           $pkg = getenv("PKG");
           $in = stream_get_contents(STDIN);
@@ -61,16 +95,12 @@ runs:
         }
 
         if [ -z "${INSTALLED_VERSION:-}" ]; then
-          echo "::notice::${PKG} not installed."
-          if [ "$MODE" = "enforce" ]; then
-            echo "::notice::Requiring >= ${MIN_VERSION}..."
-            require_pkg
-          elif [ "$MODE" = "fail" ]; then
-            echo "::error::${PKG} is missing (min ${MIN_VERSION})."
-            exit 1
-          else
-            echo "::warning::Dry run: would require ${PKG}:>=${MIN_VERSION}"
-          fi
+          echo "::notice::${PKG} not installed (or no vendor dir)."
+          case "$MODE" in
+            enforce) echo "::notice::Requiring ${PKG}:>=${MIN_VERSION}..."; require_pkg ;;
+            fail)    echo "::error::${PKG} missing (need >= ${MIN_VERSION})."; exit 1 ;;
+            dry-run) echo "::warning::Dry run: would require ${PKG}:>=${MIN_VERSION}" ;;
+          esac
           exit 0
         fi
 
