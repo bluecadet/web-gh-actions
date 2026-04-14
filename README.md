@@ -6,7 +6,9 @@ This repository contains reusable GitHub Actions for web projects.
 
 ### [`ensure-composer-package`](actions/ensure-composer-package/action.yml)
 
-Checks if a Composer package is installed at a minimum version, and can require or upgrade it if needed.
+Enforce minimum Composer package versions and optionally auto-install missing dependencies in CI.
+
+**Typical use:** Ensuring teams have the required version of shared CI tools without bloating every project's `composer.json`.
 
 **Inputs:**
 - `package` (required): Composer package name (e.g. `symfony/console`)
@@ -27,6 +29,8 @@ Checks if a Composer package is installed at a minimum version, and can require 
     dev: false
     mode: enforce
 ```
+
+See [`actions/ensure-composer-package/README.md`](./actions/ensure-composer-package/README.md) for full documentation.
 
 ---
 
