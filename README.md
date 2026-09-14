@@ -126,6 +126,8 @@ The `event_name` input has to be forwarded explicitly -- inside a called workflo
 
 Pin `@v1.x` to whatever this repo's current release tag is; don't track a branch directly, so a bad change here can't break every module's CI at once.
 
+**Tagging note:** always cut releases as a **lightweight tag** (`git tag vX.Y.Z <sha>`), not an annotated tag (`git tag -a`). `drupal-tests-and-standards.yml` calls `drupal-test-runner.yml` via a relative `./...` path -- when the outer `@vX.Y.Z` ref is an annotated tag, GitHub resolves the top-level call fine but fails to dereference the tag object for that *nested* relative call ("workflow was not found"), even though the file is right there in the tagged commit. Confirmed 2026-09-14 while piloting on `bluecadet_utilities`.
+
 ## Usage
 
 To use an action from this repository in your workflow, reference it with a relative path:
