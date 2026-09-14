@@ -1,0 +1,114 @@
+name: Module tests and standards (orchestrator)
+on:
+  workflow_call:
+    inputs:
+      event_name:
+        description: >-
+          The triggering event of the calling workflow
+          (github.event_name inside a called workflow is always
+          "workflow_call", so the caller must forward its own
+          github.event_name explicitly).
+        required: true
+        type: string
+      dispatch_drupal_core:
+        description: workflow_dispatch only -- Drupal core branch for targeted run
+        required: false
+        type: string
+      dispatch_php_version:
+        description: workflow_dispatch only -- PHP version for targeted run
+        required: false
+        type: string
+      dispatch_mariadb_version:
+        description: workflow_dispatch only -- MariaDB version for targeted run
+        required: false
+        type: string
+      dispatch_phpunit_target:
+        description: workflow_dispatch only -- PHPUnit path or file under module root
+        required: false
+        type: string
+      config_path:
+        description: Path (in the calling repo) to the CI config file
+        required: false
+        default: '.github/drupal-ci.yml'
+        type: string
+
+jobs:
+  load-config:
+    runs-on: ubuntu-latest
+    outputs:
+      pr_matrix: ${{ steps.load.outputs.pr_matrix }}
+      full_matrix: ${{ steps.load.outputs.full_matrix }}
+      phpunit_target: ${{ steps.load.outputs.phpunit_target }}
+    steps:
+      # No explicit repository/ref -- checkout defaults to the calling
+      # repo, since that's the repo the overall workflow run belongs to.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Load drupal-ci.yml config
+        id: load
+        run: |
+          CONFIG_FILE="${{ inputs.config_path }}"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "::error::Missing $CONFIG_FILE -- see bluecadet/web-gh-actions README for the expected schema." >&2
+            exit 1
+          fi
+
+          # yq (mikefarah) and jq both ship preinstalled on GitHub-hosted
+          # ubuntu runners.
+          PHPUNIT_TARGET=$(yq -r '.phpunit_target // "tests/src"' "$CONFIG_FILE")
+          PR_MATRIX=$(yq -o=json '.pr_matrix' "$CONFIG_FILE" | jq -c '. // {}')
+          FULL_MATRIX=$(yq -o=json '.full_matrix' "$CONFIG_FILE" | jq -c '. // {}')
+
+          echo "phpunit_target=$PHPUNIT_TARGET" >> "$GITHUB_OUTPUT"
+          echo "pr_matrix=$PR_MATRIX" >> "$GITHUB_OUTPUT"
+          echo "full_matrix=$FULL_MATRIX" >> "$GITHUB_OUTPUT"
+
+  test-target:
+    needs: load-config
+    if: ${{ inputs.event_name == 'workflow_dispatch' }}
+    permissions:
+      contents: read
+      pull-requests: write
+    name: Targeted | D${{ inputs.dispatch_drupal_core }} | PHP${{ inputs.dispatch_php_version }} | MariaDB${{ inputs.dispatch_mariadb_version }}
+    uses: ./.github/workflows/drupal-test-runner.yml
+    with:
+      drupal_core: ${{ inputs.dispatch_drupal_core }}
+      php_version: ${{ inputs.dispatch_php_version }}
+      mariadb_version: ${{ inputs.dispatch_mariadb_version }}
+      phpunit_target: ${{ inputs.dispatch_phpunit_target }}
+
+  test-pr:
+    needs: load-config
+    if: ${{ inputs.event_name == 'pull_request' }}
+    permissions:
+      contents: read
+      pull-requests: write
+    name: PR matrix | D${{ matrix.drupal_core }} | PHP${{ matrix.php_version }} | MariaDB${{ matrix.mariadb_version }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.load-config.outputs.pr_matrix) }}
+    uses: ./.github/workflows/drupal-test-runner.yml
+    with:
+      drupal_core: ${{ matrix.drupal_core }}
+      php_version: ${{ matrix.php_version }}
+      mariadb_version: ${{ matrix.mariadb_version }}
+      phpunit_target: ${{ needs.load-config.outputs.phpunit_target }}
+
+  test-full:
+    needs: load-config
+    if: ${{ inputs.event_name == 'push' || inputs.event_name == 'schedule' }}
+    permissions:
+      contents: read
+      pull-requests: write
+    name: Full matrix | D${{ matrix.drupal_core }} | PHP${{ matrix.php_version }} | MariaDB${{ matrix.mariadb_version }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.load-config.outputs.full_matrix) }}
+    uses: ./.github/workflows/drupal-test-runner.yml
+    with:
+      drupal_core: ${{ matrix.drupal_core }}
+      php_version: ${{ matrix.php_version }}
+      mariadb_version: ${{ matrix.mariadb_version }}
+      phpunit_target: ${{ needs.load-config.outputs.phpunit_target }}
