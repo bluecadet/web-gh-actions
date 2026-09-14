@@ -295,17 +295,30 @@ jobs:
         with:
           filename: ${{ github.workspace }}/coverage/clover.xml
 
-      - name: Add Coverage Summary to Job Summary
+      - name: Add matrix header to coverage summary
         if: ${{ hashFiles(format('{0}/coverage/clover.xml', github.workspace)) != '' }}
         run: |
-          echo "## Coverage: D${{ inputs.drupal_core }} | PHP${{ inputs.php_version }}" >> $GITHUB_STEP_SUMMARY
-          cat code-coverage-summary.md >> $GITHUB_STEP_SUMMARY
+          # code-coverage-summary.md (from the action above) is a bare
+          # table with no indication of which matrix cell it's from --
+          # when several PR-matrix combos each post their own coverage
+          # comment, they render as identical-looking tables with nothing
+          # visibly distinguishing them (the only difference is an HTML
+          # comment marker at the bottom, invisible in the rendered PR).
+          # Bake a visible heading into the file itself so both the job
+          # summary and the PR comment show it.
+          HEADER="## Coverage: D${{ inputs.drupal_core }} | PHP${{ inputs.php_version }} | MariaDB${{ inputs.mariadb_version }}"
+          { echo "$HEADER"; echo; cat code-coverage-summary.md; } > /tmp/code-coverage-summary.md
+          mv /tmp/code-coverage-summary.md code-coverage-summary.md
+
+      - name: Add Coverage Summary to Job Summary
+        if: ${{ hashFiles(format('{0}/coverage/clover.xml', github.workspace)) != '' }}
+        run: cat code-coverage-summary.md >> $GITHUB_STEP_SUMMARY
 
       - name: Add Coverage Summary as PR Comment
         if: ${{ github.event_name == 'pull_request' && hashFiles(format('{0}/coverage/clover.xml', github.workspace)) != '' }}
         uses: marocchino/sticky-pull-request-comment@v3
         with:
-          header: coverage-${{ inputs.drupal_core }}-php${{ inputs.php_version }}
+          header: coverage-${{ inputs.drupal_core }}-php${{ inputs.php_version }}-mariadb${{ inputs.mariadb_version }}
           path: code-coverage-summary.md
 
       - name: Add check results to job summary
