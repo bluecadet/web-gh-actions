@@ -210,7 +210,27 @@ jobs:
             [ -d "$dir" ] && TEST_PATHS="$TEST_PATHS $dir"
           done
 
-          if php -m | grep -qiE 'xdebug|pcov'; then
+          # Coverage filters are scoped to src/ directories rather than the
+          # whole $MODULE_FOLDER, which would otherwise also pull in vendored
+          # JS-package PHP files under node_modules and inflate the coverage
+          # denominator with code that can never be tested. A bare *.module
+          # file is deliberately NOT included here: PHPUnit's coverage engine
+          # only recognizes .php-extension files under a real directory for
+          # --coverage-filter, so pointing it at a .module file is a silent
+          # no-op -- PHPUnit 9 (Drupal 10.x) tolerates the resulting "no files
+          # matched" case and emits an empty report, but PHPUnit 11 (Drupal
+          # 11.x) treats it as fatal. A module with no src/ directory (all
+          # its code in the root .module file, e.g. bluecadet_ajax_content)
+          # therefore has no PHP-extension source this mechanism can measure
+          # at all -- skip coverage entirely rather than fail the build over
+          # a coverage-reporting technicality.
+          COVERAGE_ARGS=""
+          [ -d "$MODULE_FOLDER/src" ] && COVERAGE_ARGS="--coverage-filter $MODULE_FOLDER/src"
+          for dir in "$MODULE_FOLDER"/modules/*/src; do
+            [ -d "$dir" ] && COVERAGE_ARGS="$COVERAGE_ARGS --coverage-filter $dir"
+          done
+
+          if [ -n "$COVERAGE_ARGS" ] && php -m | grep -qiE 'xdebug|pcov'; then
             # $MODULE_FOLDER is a symlink (Composer path repo) into
             # $GITHUB_WORKSPACE. PCOV scopes instrumentation by directory
             # prefix against each file's *resolved* real path, so pointing
@@ -218,23 +238,17 @@ jobs:
             # not of its target) silently instruments nothing -- every file
             # under the module resolves to a real path under
             # $GITHUB_WORKSPACE instead. Point it there directly.
-            #
-            # Coverage filters are scoped to src/*.module directories rather
-            # than the whole $MODULE_FOLDER, which would otherwise also pull
-            # in vendored JS-package PHP files under node_modules and inflate
-            # the coverage denominator with code that can never be tested.
-            COVERAGE_ARGS="--coverage-filter $MODULE_FOLDER/src --coverage-filter $MODULE_FOLDER/*.module"
-            for dir in "$MODULE_FOLDER"/modules/*/src; do
-              [ -d "$dir" ] && COVERAGE_ARGS="$COVERAGE_ARGS --coverage-filter $dir"
-            done
-
             php -d pcov.directory="$GITHUB_WORKSPACE" vendor/bin/phpunit \
               --bootstrap $DRUPAL_ROOT/core/tests/bootstrap.php \
               $COVERAGE_ARGS \
               --coverage-clover "$GITHUB_WORKSPACE/coverage/clover.xml" \
               $TEST_PATHS
           else
-            echo "No code coverage driver (xdebug/pcov) available; running tests without coverage output."
+            if [ -z "$COVERAGE_ARGS" ]; then
+              echo "No src/ directory found; nothing for the coverage engine to measure. Running tests without coverage output."
+            else
+              echo "No code coverage driver (xdebug/pcov) available; running tests without coverage output."
+            fi
             vendor/bin/phpunit \
               --bootstrap $DRUPAL_ROOT/core/tests/bootstrap.php \
               $TEST_PATHS
