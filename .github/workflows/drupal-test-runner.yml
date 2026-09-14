@@ -210,27 +210,7 @@ jobs:
             [ -d "$dir" ] && TEST_PATHS="$TEST_PATHS $dir"
           done
 
-          # Coverage filters are scoped to src/ directories rather than the
-          # whole $MODULE_FOLDER, which would otherwise also pull in vendored
-          # JS-package PHP files under node_modules and inflate the coverage
-          # denominator with code that can never be tested. A bare *.module
-          # file is deliberately NOT included here: PHPUnit's coverage engine
-          # only recognizes .php-extension files under a real directory for
-          # --coverage-filter, so pointing it at a .module file is a silent
-          # no-op -- PHPUnit 9 (Drupal 10.x) tolerates the resulting "no files
-          # matched" case and emits an empty report, but PHPUnit 11 (Drupal
-          # 11.x) treats it as fatal. A module with no src/ directory (all
-          # its code in the root .module file, e.g. bluecadet_ajax_content)
-          # therefore has no PHP-extension source this mechanism can measure
-          # at all -- skip coverage entirely rather than fail the build over
-          # a coverage-reporting technicality.
-          COVERAGE_ARGS=""
-          [ -d "$MODULE_FOLDER/src" ] && COVERAGE_ARGS="--coverage-filter $MODULE_FOLDER/src"
-          for dir in "$MODULE_FOLDER"/modules/*/src; do
-            [ -d "$dir" ] && COVERAGE_ARGS="$COVERAGE_ARGS --coverage-filter $dir"
-          done
-
-          if [ -n "$COVERAGE_ARGS" ] && php -m | grep -qiE 'xdebug|pcov'; then
+          if php -m | grep -qiE 'xdebug|pcov'; then
             # $MODULE_FOLDER is a symlink (Composer path repo) into
             # $GITHUB_WORKSPACE. PCOV scopes instrumentation by directory
             # prefix against each file's *resolved* real path, so pointing
@@ -238,17 +218,64 @@ jobs:
             # not of its target) silently instruments nothing -- every file
             # under the module resolves to a real path under
             # $GITHUB_WORKSPACE instead. Point it there directly.
-            php -d pcov.directory="$GITHUB_WORKSPACE" vendor/bin/phpunit \
-              --bootstrap $DRUPAL_ROOT/core/tests/bootstrap.php \
-              $COVERAGE_ARGS \
-              --coverage-clover "$GITHUB_WORKSPACE/coverage/clover.xml" \
-              $TEST_PATHS
-          else
-            if [ -z "$COVERAGE_ARGS" ]; then
-              echo "No src/ directory found; nothing for the coverage engine to measure. Running tests without coverage output."
+            PHPUNIT_MAJOR=$(vendor/bin/phpunit --version | grep -oE '[0-9]+' | head -1)
+
+            if [ "$PHPUNIT_MAJOR" -ge 10 ]; then
+              # PHPUnit 10+ (Drupal 11.x) supports a custom file suffix via
+              # the <source> XML schema -- the CLI --coverage-filter flag
+              # can't do this (directory-only, implicitly .php-suffix-only).
+              # Generate a minimal config so *.module files (where most
+              # Drupal hook code actually lives) get measured too, alongside
+              # any src/ classes. Recursing the whole $MODULE_FOLDER for the
+              # .module suffix is safe against denominator pollution --
+              # nothing under node_modules/vendor ships a *.module file.
+              COVERAGE_CONFIG="$GITHUB_WORKSPACE/coverage/phpunit-coverage.xml"
+              {
+                echo '<?xml version="1.0" encoding="UTF-8"?>'
+                echo '<phpunit bootstrap="'"$DRUPAL_ROOT"'/core/tests/bootstrap.php">'
+                echo '  <source>'
+                echo '    <include>'
+                [ -d "$MODULE_FOLDER/src" ] && echo '      <directory suffix=".php">'"$MODULE_FOLDER"'/src</directory>'
+                for dir in "$MODULE_FOLDER"/modules/*/src; do
+                  [ -d "$dir" ] && echo '      <directory suffix=".php">'"$dir"'</directory>'
+                done
+                echo '      <directory suffix=".module">'"$MODULE_FOLDER"'</directory>'
+                echo '    </include>'
+                echo '  </source>'
+                echo '</phpunit>'
+              } > "$COVERAGE_CONFIG"
+
+              php -d pcov.directory="$GITHUB_WORKSPACE" vendor/bin/phpunit \
+                --configuration "$COVERAGE_CONFIG" \
+                --coverage-clover "$GITHUB_WORKSPACE/coverage/clover.xml" \
+                $TEST_PATHS
             else
-              echo "No code coverage driver (xdebug/pcov) available; running tests without coverage output."
+              # PHPUnit 9 (Drupal 10.x) only understands the legacy
+              # <coverage><include> schema, which PHPUnit 11 ignores
+              # outright -- no single config works for both, so this path
+              # keeps the older CLI --coverage-filter approach (src/ .php
+              # files only; .module files aren't measurable here).
+              COVERAGE_ARGS=""
+              [ -d "$MODULE_FOLDER/src" ] && COVERAGE_ARGS="--coverage-filter $MODULE_FOLDER/src"
+              for dir in "$MODULE_FOLDER"/modules/*/src; do
+                [ -d "$dir" ] && COVERAGE_ARGS="$COVERAGE_ARGS --coverage-filter $dir"
+              done
+
+              if [ -n "$COVERAGE_ARGS" ]; then
+                php -d pcov.directory="$GITHUB_WORKSPACE" vendor/bin/phpunit \
+                  --bootstrap $DRUPAL_ROOT/core/tests/bootstrap.php \
+                  $COVERAGE_ARGS \
+                  --coverage-clover "$GITHUB_WORKSPACE/coverage/clover.xml" \
+                  $TEST_PATHS
+              else
+                echo "No src/ directory found; nothing for PHPUnit 9's coverage-filter to measure. Running tests without coverage output."
+                vendor/bin/phpunit \
+                  --bootstrap $DRUPAL_ROOT/core/tests/bootstrap.php \
+                  $TEST_PATHS
+              fi
             fi
+          else
+            echo "No code coverage driver (xdebug/pcov) available; running tests without coverage output."
             vendor/bin/phpunit \
               --bootstrap $DRUPAL_ROOT/core/tests/bootstrap.php \
               $TEST_PATHS
